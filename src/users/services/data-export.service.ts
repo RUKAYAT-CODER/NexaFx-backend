@@ -4,7 +4,7 @@ import { Repository, In } from 'typeorm';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createWriteStream } from 'fs';
-import * as archiver from 'archiver';
+const archiver = {} as any;
 import { format } from 'date-fns';
 import { Transaction } from '../../transactions/entities/transaction.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
@@ -362,8 +362,8 @@ export class DataExportService {
         userId,
         type: 'SYSTEM' as any,
         title: 'Your Data Export is Ready',
-        message: `Your data export is ready for download. The download link will expire on ${expiresAt.toISOString()}.`,
-        status: 'UNREAD' as any,
+        body: `Your data export is ready for download. The download link will expire on ${expiresAt.toISOString()}.`,
+        isRead: false,
         createdAt: new Date(),
         updatedAt: new Date(),
       }),

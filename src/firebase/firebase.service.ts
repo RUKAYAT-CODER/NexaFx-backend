@@ -1,12 +1,12 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as admin from 'firebase-admin';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getMessaging, MulticastMessage } from 'firebase-admin/messaging';
 
 @Injectable()
-export class FirebaseService implements OnModuleInit {
+export class FirebaseService {
   private readonly logger = new Logger(FirebaseService.name);
   private initialized = false;
-
   constructor(private readonly configService: ConfigService) {}
 
   onModuleInit() {
@@ -15,7 +15,7 @@ export class FirebaseService implements OnModuleInit {
 
   private initializeFirebase() {
     try {
-      if (admin.apps && admin.apps.length > 0) {
+      if (getApps().length > 0) {
         this.initialized = true;
         this.logger.log('Firebase Admin SDK already initialized');
         return;
@@ -32,12 +32,15 @@ export class FirebaseService implements OnModuleInit {
           const serviceAccount = JSON.parse(serviceAccountJson);
           credentialConfig = {
             projectId: serviceAccount.project_id || serviceAccount.projectId,
-            clientEmail: serviceAccount.client_email || serviceAccount.clientEmail,
-            privateKey: (serviceAccount.private_key || serviceAccount.privateKey)?.replace(/\\n/g, '\n'),
+            clientEmail:
+              serviceAccount.client_email || serviceAccount.clientEmail,
+            privateKey: (
+              serviceAccount.private_key || serviceAccount.privateKey
+            )?.replace(/\\n/g, '\n'),
           };
         } catch (jsonError) {
           this.logger.error(
-            `Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ${jsonError.message}`,
+            `Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ${(jsonError as any).message}`,
           );
         }
       }
@@ -60,15 +63,20 @@ export class FirebaseService implements OnModuleInit {
         }
       }
 
-      if (!credentialConfig || !credentialConfig.projectId || !credentialConfig.clientEmail || !credentialConfig.privateKey) {
+      if (
+        !credentialConfig ||
+        !credentialConfig.projectId ||
+        !credentialConfig.clientEmail ||
+        !credentialConfig.privateKey
+      ) {
         this.logger.warn(
           'Firebase credentials not fully configured. Push notifications will be disabled.',
         );
         return;
       }
 
-      admin.initializeApp({
-        credential: admin.credential.cert({
+      initializeApp({
+        credential: cert({
           projectId: credentialConfig.projectId,
           clientEmail: credentialConfig.clientEmail,
           privateKey: credentialConfig.privateKey,
@@ -110,7 +118,7 @@ export class FirebaseService implements OnModuleInit {
         ...(structuredData ?? {}),
       };
 
-      const message: admin.messaging.MulticastMessage = {
+      const message: MulticastMessage = {
         notification: {
           title,
           body,
@@ -122,7 +130,7 @@ export class FirebaseService implements OnModuleInit {
         message.data = mergedData;
       }
 
-      const response = await admin.messaging().sendEachForMulticast(message);
+      const response = await getMessaging().sendEachForMulticast(message);
 
       if (response.failureCount > 0) {
         const failedTokens: string[] = [];

@@ -1,14 +1,17 @@
 import {
   Injectable,
-  Logger,
   NotFoundException,
+  ConflictException,
   BadRequestException,
+  Logger,
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, MoreThanOrEqual } from 'typeorm';
+import { Repository, DataSource, In, Between, MoreThanOrEqual } from 'typeorm';
+import Decimal from 'decimal.js';
 import * as fastCsv from 'fast-csv';
 import * as PDFDocument from 'pdfkit';
+
 import {
   Transaction,
   TransactionType,
@@ -82,8 +85,9 @@ export class AnalyticsService {
     private readonly exportJobRepository: Repository<ReportExportJob>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly exchangeRatesService: ExchangeRatesService,
     private readonly usersService: UsersService,
+    private readonly exchangeRatesService: ExchangeRatesService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async getSystemCategories(): Promise<TransactionCategory[]> {

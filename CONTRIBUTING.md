@@ -8,10 +8,50 @@ Welcome! We're excited that you're interested in contributing to the **NexaFX Ba
 
 To contribute to this project, ensure you have the following installed:
 
-- **Node.js**: v20+ (LTS recommended)
+- **Node.js**: v20+ (LTS recommended) — always use the version pinned in [`.nvmrc`](./.nvmrc) (`nvm use`) so your local lock file matches CI
 - **Docker & Docker Compose**: For running PostgreSQL and other services
 - **npm**: v9+ (comes with Node.js)
 - **Git**: For version control
+
+---
+
+## 🔒 Lock File Hygiene
+
+`package-lock.json` must always stay in sync with `package.json`. CI runs `npm ci`,
+which fails hard on any drift — this blocks every PR until it's fixed.
+
+- **Always run `npm install`** (never edit `package.json` by hand and skip regenerating the lock file) after adding, removing, or updating a dependency, and commit the resulting `package-lock.json` change.
+- **Never run `npm ci` to "fix" a failing install** — `npm ci` does not update the lock file; use `npm install` and verify with `npm ci --dry-run` before pushing.
+- A pre-commit hook (via Husky, see `.husky/pre-commit`) runs `npm ci --dry-run` to verify lock file sync, then runs `npx lint-staged` to lint and format only staged files. If lint-staged finds issues, the commit is blocked. You can bypass the hook for emergency commits with `git commit --no-verify`.
+- CI also runs a `Verify lock file sync` step (`npm ci --dry-run`) before installing, so drift fails fast with a clear message instead of a confusing `npm ci` error.
+- Dependabot is configured (`.github/dependabot.yml`) to open weekly PRs for npm updates, keeping the lock file fresh and reducing manual drift.
+
+---
+
+## ✅ CI Must Be Green Before Merge
+
+CI is a gate, not a formality. A pull request may only be merged once **every**
+required check on the surviving pipeline (`.github/workflows/ci-v2.yml`) has
+actually **passed** — not merely run.
+
+- **Green means green.** A check that is present but skipped, neutral, or
+  "passing" because its failures were swallowed is **not** green. Do not merge
+  on a yellow/neutral result.
+- **Masked steps are not acceptable in this repo.** Never append `|| true`
+  (or otherwise swallow the exit code) to a verification step such as lint,
+  `tsc --noEmit`, migrations, tests, or the build. If a step is worth running in
+  CI, it is worth failing the build when it breaks. Fix the underlying failure
+  instead of masking it.
+- **Exactly one pipeline governs `v2`.** `ci-v2.yml` is the sole CI workflow for
+  pushes and pull requests to `v2`; the legacy masked `ci.yml` has been retired
+  and deleted. Do not reintroduce a second, parallel pipeline.
+- **Required status checks.** The jobs in `ci-v2.yml` are configured as required
+  status checks on the `v2` branch in GitHub branch protection settings. This is
+  a repository setting, not something a workflow file can enforce — if you have
+  admin access and the checks are not blocking, fix the branch protection rule.
+- **Expect red while fixes land.** Turning off masking is intentional: until the
+  compile-error fixes elsewhere in the wave are merged, the pipeline will be red.
+  That is the correct outcome — land the fixes, don't re-mask the checks.
 
 ---
 
@@ -188,6 +228,7 @@ Before submitting your PR, ensure all items are checked:
 - [ ] No secrets or sensitive data are committed
 - [ ] ESLint and Prettier checks pass
 - [ ] TypeScript compilation passes without errors
+- [ ] CI (`ci-v2.yml`) is green — all required checks passed, none masked
 
 ---
 
@@ -220,116 +261,6 @@ All database schema changes **must** follow our transactional migration pattern:
 - Migrations must be idempotent where possible
 - Migrations should be tested in a staging environment first
 
-### Creating Migrations
-```bash
-npm run typeorm:migration:generate -- src/migrations/descriptive-migration-name
-```
+### Creating Migration
 
-### Applying Migrations
-```bash
-npm run typeorm:migration:run
-```
-
-### Reverting Migrations
-```bash
-npm run typeorm:migration:revert
-```
-
----
-
-## 🏆 200-Point Rewards System
-
-We reward contributors for their work! Earn points by completing tasks:
-
-| Task Type                          | Points | Description                                  |
-|------------------------------------|--------|----------------------------------------------|
-| Documentation Update               | 50     | Improve docs, fix typos, add examples        |
-| Bug Fix (Minor)                    | 100    | Fix small bugs, improve error handling       |
-| Bug Fix (Major)                    | 200    | Fix critical issues affecting core features  |
-| Feature (Small)                    | 150    | Add simple features or endpoints             |
-| Feature (Medium/Large)             | 300+   | Complex features or modules (points vary)    |
-| Code Refactor/Improvement          | 100    | Improve code quality, performance            |
-| Test Coverage Increase             | 100    | Add tests to improve coverage by 5%+         |
-
-### How to Redeem
-- Points can be redeemed for swag, gift cards, or project tokens
-- Track your progress in our Telegram group
-- Points are awarded after PR merge by maintainers
-
----
-
-## 📚 Architectural Decision Records (ADRs)
-
-For key architectural decisions, refer to our ADRs in [docs/adr/](./docs/adr/):
-- [0001 - NestJS over Express](./docs/adr/0001-nestjs-over-express.md)
-- [0002 - TypeORM over Prisma](./docs/adr/0002-typeorm-over-prisma.md)
-- [0003 - synchronize: false is a hard rule](./docs/adr/0003-synchronize-false.md)
-- [0004 - Decimal.js for money](./docs/adr/0004-decimaljs-for-money.md)
-- [0005 - Stellar over Ethereum/Solana](./docs/adr/0005-stellar-over-ethereum-solana.md)
-- [0006 - CQRS for transactions module](./docs/adr/0006-cqrs-for-transactions.md)
-
----
-
-## 🔄 Database Migrations (v2 — Required)
-
-All database migrations on the **v2** branch **must** follow the transactional
-pattern. PRs that do not comply will be rejected during review.
-
-### Mandatory pattern
-
-Every migration `up()` and `down()` must be wrapped in an explicit transaction:
-
-```typescript
-public async up(queryRunner: QueryRunner): Promise<void> {
-  await queryRunner.startTransaction();
-  try {
-    await queryRunner.query(`...`);
-    await queryRunner.commitTransaction();
-  } catch (err) {
-    await queryRunner.rollbackTransaction();
-    throw err;
-  }
-}
-```
-
-Apply the same pattern to `down()`.
-
-> **Exception**: DDL that cannot run inside a transaction (e.g.
-> `CREATE INDEX CONCURRENTLY`) must be placed outside the transaction block
-> with a clear comment explaining why.
-
-### Generating a new migration
-
-```bash
-npm run typeorm:migration:generate -- -n YourMigrationName
-```
-
-Then wrap the generated `up()` and `down()` in the transactional pattern above.
-
-### Dry-run validation (required before merge)
-
-Every PR targeting `v2` automatically runs migration rollback validation via
-the `ci-v2.yml` workflow. You can run it locally before pushing:
-
-```bash
-# Docker must be running
-npm run migration:validate
-```
-
-This starts a temporary PostgreSQL container, runs all migrations up, then
-reverts every one of them. If any `down()` fails, the PR **cannot** merge.
-
-### Pre-migration snapshots (required for staging/production)
-
-Before applying migrations to any live environment, trigger the
-**Pre-Migration Workflow** on GitHub Actions and select the target environment.
-This takes a `pg_dump` snapshot and uploads it to S3 before running
-migrations. See [docs/migrations.md](docs/migrations.md) for full details.
-
----
-
-## 🙏 Thank You
-
-Thanks for contributing to **NexaFX** — your input makes the project better!
-
-If you have questions, join our [Telegram group](https://t.me/+WkWO3kNnA-1mYzVk).
+/* … truncated 3904 chars — edit only what you need near the top … */

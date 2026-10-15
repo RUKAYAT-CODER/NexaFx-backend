@@ -6,6 +6,7 @@ import {
   Inject,
   Optional,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { KYCApplication, KycStatus } from './entities/kyc-application.entity';
@@ -13,7 +14,6 @@ import { User, UserKycTier } from '../users/user.entity';
 import {
   Notification,
   NotificationType,
-  NotificationStatus,
 } from '../notifications/entities/notification.entity';
 import { FirebaseService } from '../firebase/firebase.service';
 import { WebhookService } from '../webhooks/services/webhook.service';
@@ -25,6 +25,8 @@ import { scanBuffer } from '../common/helpers/virus-scanner.helper';
 import { validateSelfieVideo } from '../common/helpers/video-duration-scanner.helper';
 import { SanctionsService } from '../sanctions/sanctions.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { UnifiedActivityFeedService } from '../unified-activity-feed/unified-activity-feed.service';
+import { ActivityFeedType } from '../unified-activity-feed/entities/activity-feed-item.entity';
 
 type DocumentFiles = {
   governmentIdFront?: Express.Multer.File;
@@ -49,6 +51,7 @@ export class KycService {
     private readonly webhookService: WebhookService,
     @Inject(STORAGE_SERVICE_TOKEN)
     private readonly storageService: StorageService,
+    private readonly activityFeedService: UnifiedActivityFeedService,
     @Optional()
     private readonly sanctionsService?: SanctionsService,
   ) {}
@@ -162,10 +165,7 @@ export class KycService {
       };
 
       documents['videoSelfie'] = {
-        s3Key: await this.storageService.upload(
-          files.videoSelfie,
-          storagePath,
-        ),
+        s3Key: await this.storageService.upload(files.videoSelfie, storagePath),
         mimeType: files.videoSelfie.mimetype,
       };
     }
@@ -373,13 +373,15 @@ export class KycService {
       where.status = status;
     }
 
-    const [records, total] = await this.kycRepository.findAndCount({
-      where,
-      relations: ['user', 'reviewer'],
-      order: { createdAt: 'ASC' },
-      skip,
-      take: limit,
-    });
+    const [records, total] = await this.kycRepository
+      .createQueryBuilder('kyc')
+      .leftJoinAndSelect('kyc.user', 'user')
+      .leftJoinAndSelect('kyc.reviewer', 'reviewer')
+      .where(where)
+      .orderBy('kyc.createdAt', 'ASC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
 
     return {
       data: records.map((r) => ({
@@ -428,14 +430,14 @@ export class KycService {
       await manager.save(kyc);
       await manager.save(user);
 
-      const notificationPayload: Partial<Notification> = {
+      const notificationPayload: any = {
         userId: user.id,
-        type: NotificationType.SYSTEM,
+        type: NotificationType.SECURITY_ALERT,
         title: 'KYC Approved',
-        message: `Your identity verification for ${kyc.targetTier} tier has been approved.`,
-        status: NotificationStatus.UNREAD,
-        relatedId: kyc.id,
-        metadata: {
+        body: `Your identity verification for ${kyc.targetTier} tier has been approved.`,
+        isRead: false,
+        data: {
+          relatedId: kyc.id,
           entity: 'KYC',
           kycStatus: 'approved',
           tier: kyc.targetTier,
@@ -469,6 +471,17 @@ export class KycService {
         .dispatch('kyc.approved', kyc, user.id)
         .catch((err: Error) =>
           this.logger.error(`Webhook dispatch failed: ${err.message}`),
+        );
+
+      this.activityFeedService
+        .append(
+          kyc.userId,
+          ActivityFeedType.KYC_DECISION,
+          kyc.id,
+          'KYCApplication',
+        )
+        .catch((err: Error) =>
+          this.logger.error(`Failed to append KYC activity: ${err.message}`),
         );
 
       this.sanctionsService
@@ -517,17 +530,21 @@ export class KycService {
           ? `Your KYC submission requires changes. Reason: ${reason}`
           : `Your KYC submission was rejected. Reason: ${reason}`;
 
-      const notificationPayload: Partial<Notification> = {
+      const notificationPayload: any = {
         userId: user.id,
-        type: NotificationType.SYSTEM,
+        type: NotificationType.SECURITY_ALERT,
         title:
           newStatus === KycStatus.RESUBMISSION_REQUIRED
             ? 'KYC Resubmission Required'
             : 'KYC Rejected',
-        message: notificationMessage,
-        status: NotificationStatus.UNREAD,
-        relatedId: kyc.id,
-        metadata: { entity: 'KYC', kycStatus: newStatus, reason },
+        body: notificationMessage,
+        isRead: false,
+        data: {
+          relatedId: kyc.id,
+          entity: 'KYC',
+          kycStatus: newStatus,
+          reason,
+        },
       };
       await manager.save(Notification, notificationPayload);
 
@@ -535,8 +552,8 @@ export class KycService {
         this.firebaseService
           .sendToTokens(
             user.fcmTokens,
-            notificationPayload.title!,
-            notificationPayload.message!,
+            notificationPayload.title,
+            notificationPayload.message,
             { entity: 'KYC', kycStatus: newStatus.toLowerCase() },
             {
               notificationId: notificationPayload.id ?? '',
@@ -561,6 +578,17 @@ export class KycService {
         .dispatch(webhookEvent, kyc, user.id)
         .catch((err: Error) =>
           this.logger.error(`Webhook dispatch failed: ${err.message}`),
+        );
+
+      this.activityFeedService
+        .append(
+          kyc.userId,
+          ActivityFeedType.KYC_DECISION,
+          kyc.id,
+          'KYCApplication',
+        )
+        .catch((err: Error) =>
+          this.logger.error(`Failed to append KYC activity: ${err.message}`),
         );
 
       return {

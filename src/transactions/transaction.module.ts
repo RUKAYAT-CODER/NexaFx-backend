@@ -2,8 +2,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TransactionsService } from './services/transaction.service';
 import { TransactionVerificationService } from './services/transaction-verification.service';
+import { TransactionReversalService } from './services/transaction-reversal.service';
+import { TransactionReversalController } from './controllers/transaction-reversal.controller';
 import { TransactionsController } from './controllers/transaction.controller';
 import { Transaction } from './entities/transaction.entity';
+import { TransactionReversal } from './entities/transaction-reversal.entity';
 import { TransactionCategory } from '../analytics/entities/transaction-category.entity';
 import { CurrenciesModule } from '../currencies/currencies.module';
 import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
@@ -22,10 +25,18 @@ import { CommonModule } from '../common/common.module';
 import { TransactionLimitsModule } from './transaction-limits.module';
 import { ComplianceModule } from '../modules/compliance/compliance.module';
 import { KycModule } from '../kyc/kyc.module';
+import { MicroSavingsModule } from '../modules/micro-savings/micro-savings.module';
+import { UnifiedActivityFeedModule } from '../unified-activity-feed/unified-activity-feed.module';
+import { QueuesModule } from '../modules/queues/queues.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Transaction, TransactionCategory]),
+    QueuesModule,
+    TypeOrmModule.forFeature([
+      Transaction,
+      TransactionCategory,
+      TransactionReversal,
+    ]),
     CurrenciesModule,
     ExchangeRatesModule,
     BlockchainModule,
@@ -43,9 +54,15 @@ import { KycModule } from '../kyc/kyc.module';
     TransactionLimitsModule,
     ComplianceModule,
     KycModule,
+    MicroSavingsModule,
+    UnifiedActivityFeedModule,
   ],
-  controllers: [TransactionsController],
-  providers: [TransactionsService, TransactionVerificationService],
+  controllers: [TransactionsController, TransactionReversalController],
+  providers: [
+    TransactionsService,
+    TransactionVerificationService,
+    TransactionReversalService,
+  ],
   exports: [TransactionsService],
 })
 export class TransactionsModule {}

@@ -19,6 +19,9 @@ import { ReferralsModule } from '../referrals/referrals.module';
 import { TwoFactorModule } from '../two-factor/two-factor.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { MailModule } from '../modules/mail/mail.module';
+import { UnifiedActivityFeedModule } from '../unified-activity-feed/unified-activity-feed.module';
+import { IntelligentSmsRoutingModule } from '../intelligent-sms-routing/intelligent-sms-routing.module';
+import { GdprModule } from '../modules/gdpr/gdpr.module';
 
 type JwtExpiryValue = `${number}${'s' | 'm' | 'h' | 'd'}`;
 
@@ -34,6 +37,9 @@ type JwtExpiryValue = `${number}${'s' | 'm' | 'h' | 'd'}`;
     WalletsModule,
     MailModule,
     PassportModule,
+    UnifiedActivityFeedModule,
+    IntelligentSmsRoutingModule,
+    GdprModule,
     TypeOrmModule.forFeature([PasswordResetAttempt, OAuthAccount]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

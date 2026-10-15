@@ -5,21 +5,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Repository, In } from 'typeorm';
-import {
-  Notification,
-  NotificationStatus,
-  NotificationType,
-} from './entities/notification.entity';
+import { Notification, NotificationType } from './entities/notification.entity';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { resolveDeepLink } from './deep-links.registry';
-import { UpdateNotificationDto } from './dto/update-notification.dto';
-import {
-  NotificationResponseDto,
-  PaginatedNotificationResponse,
-} from './dto/notification-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Notification, NotificationType } from './entities/notification.entity';
 import { User } from '../users/user.entity';
 import { FCMService } from '../firebase/fcm.service';
 import { ConfigService } from '@nestjs/config';
@@ -39,67 +28,56 @@ export class NotificationsService {
     private readonly configService: ConfigService,
   ) {}
 
+  async create(dto: CreateNotificationDto): Promise<Notification>;
   async create(
-    createNotificationDto: CreateNotificationDto,
-  ): Promise<NotificationResponseDto | null> {
+    userId: string,
+    type: NotificationType,
+    title: string,
+    body: string,
+    data?: Record<string, any>,
+  ): Promise<Notification>;
+  async create(
+    userIdOrDto: string | CreateNotificationDto,
+    type?: NotificationType,
+    title?: string,
+    body?: string,
+    data?: Record<string, any>,
+  ): Promise<Notification> {
     try {
-      const preference = await this.preferenceService.getPreference(
-        createNotificationDto.userId,
-        createNotificationDto.type,
-      );
-
-      if (
-        !(await this.preferenceService.isChannelEnabled(
-          createNotificationDto.userId,
-          createNotificationDto.type,
-          'inApp',
-        ))
-      ) {
-        return null;
-      }
-
-      const deepLink =
-        createNotificationDto.actionUrl ??
-        resolveDeepLink(createNotificationDto.type, {
-          notificationId: '',
-          resourceId: createNotificationDto.relatedId,
+      if (typeof userIdOrDto === 'string') {
+        const notification = this.notificationRepository.create({
+          userId: userIdOrDto,
+          type: type as NotificationType,
+          title: title as string,
+          body: body as string,
+          data: data || {},
         });
+        return await this.notificationRepository.save(notification);
+      } else {
+        const dto = userIdOrDto;
+        const deepLink =
+          dto.actionUrl ??
+          resolveDeepLink(dto.type, {
+            notificationId: '',
+            resourceId: (dto as any).relatedId,
+          });
 
-      const dtoWithDeepLink = { ...createNotificationDto, actionUrl: deepLink };
+        const metadata = dto.metadata || {};
+        const mergedData = { ...metadata, actionUrl: deepLink };
 
-      const notification = this.notificationsRepository.create(
-        preference.digestMode === NotificationDigestMode.IMMEDIATE
-          ? dtoWithDeepLink
-          : {
-              ...dtoWithDeepLink,
-              metadata: {
-                ...(createNotificationDto.metadata ?? {}),
-                digestMode: preference.digestMode,
-                digestPending: true,
-              },
-            },
-      );
-      const saved = await this.notificationsRepository.save(notification);
-      return this.mapToResponseDto(saved);
+        const notification = this.notificationRepository.create({
+          userId: dto.userId,
+          type: dto.type,
+          title: dto.title,
+          body: dto.message || '',
+          data: mergedData,
+        });
+        return await this.notificationRepository.save(notification);
+      }
     } catch (error) {
       this.logger.error('Failed to create notification', error);
       throw new BadRequestException('Failed to create notification');
     }
-  }
-  async updateBatchStatus(
-    notificationIds: string[],
-    status: NotificationStatus,
-  ): Promise<{ updated: number }> {
-    if (!notificationIds || notificationIds.length === 0) {
-      throw new BadRequestException('Notification IDs are required');
-    }
-
-    const result = await this.notificationsRepository.update(
-      { id: In(notificationIds) },
-      { status },
-    );
-
-    return { updated: result.affected || 0 };
   }
 
   async dispatch(
@@ -116,20 +94,20 @@ export class NotificationsService {
       // 2. Fetch the user and their notification preferences
       const user = await this.userRepository.findOne({ where: { id: userId } });
       if (!user) {
-        this.logger.warn(`User ${userId} not found during notification dispatch.`);
+        this.logger.warn(
+          `User ${userId} not found during notification dispatch.`,
+        );
         return notification;
       }
 
-      const prefs = user.notificationPreferences || {
+      const prefs = (user as any).notificationPreferences || {
         email: true,
         push: true,
         types: { TRANSACTION: true, KYC: true, RATE_ALERT: true },
       };
 
       // Check if this type is enabled for the user
-      const isTypeEnabled =
-        type === NotificationType.SYSTEM ||
-        prefs.types?.[type] !== false;
+      const isTypeEnabled = prefs.types?.[type] !== false;
 
       if (!isTypeEnabled) {
         this.logger.log(
@@ -157,6 +135,17 @@ export class NotificationsService {
     return notification;
   }
 
+  /**
+   * Create and deliver a notification from a compact payload, e.g. when a
+   * background job (like statement generation) notifies a user.
+   */
+  async createAndSend(
+    userId: string,
+    payload: { title: string; body: string; type: NotificationType },
+  ): Promise<Notification> {
+    return this.dispatch(userId, payload.type, payload.title, payload.body);
+  }
+
   async getNotifications(
     userId: string,
     page: number = 1,
@@ -168,12 +157,13 @@ export class NotificationsService {
       where.isRead = isRead;
     }
 
-    const [data, total] = await this.notificationRepository.findAndCount({
-      where,
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const [data, total] = await this.notificationRepository
+      .createQueryBuilder('notification')
+      .where(where)
+      .orderBy('notification.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
 
     return {
       data,
@@ -213,7 +203,11 @@ export class NotificationsService {
     return { count };
   }
 
-  private async sendEmail(to: string, subject: string, body: string): Promise<void> {
+  private async sendEmail(
+    to: string,
+    subject: string,
+    body: string,
+  ): Promise<void> {
     const skipEmail = this.configService.get<string>('SKIP_EMAIL_SENDING');
 
     if (skipEmail === 'true') {

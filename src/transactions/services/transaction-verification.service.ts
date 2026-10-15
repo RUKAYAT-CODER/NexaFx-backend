@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Scope } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TransactionsService } from './transaction.service';
 import { UserRole } from '../../users/user.entity';
@@ -21,9 +21,7 @@ export class TransactionVerificationService {
    */
   private isRunning = false;
 
-  constructor(
-    private readonly transactionsService: TransactionsService,
-  ) {}
+  constructor(private readonly transactionsService: TransactionsService) {}
 
   /**
    * Automatically verifies pending transactions every 5 minutes.

@@ -24,12 +24,9 @@ export enum UserPlan {
   ENTERPRISE = 'ENTERPRISE',
 }
 
-export enum UserKycTier {
-  NONE = 'NONE',
-  BASIC = 'BASIC',
-  STANDARD = 'STANDARD',
-  ENHANCED = 'ENHANCED',
-}
+import { UserKycTier } from './enums/user-kyc-tier.enum';
+
+export { UserKycTier };
 
 @Entity('users')
 export class User {
@@ -129,6 +126,9 @@ export class User {
   @Column({ type: 'boolean', default: false })
   isSuspended: boolean;
 
+  @Column({ type: 'int', default: 0 })
+  complianceRiskScore: number;
+
   @Column({ type: 'boolean', default: false })
   isTwoFactorEnabled: boolean;
 
@@ -172,9 +172,6 @@ export class User {
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   consentGdprVersion: string | null;
-
-  @Column({ type: 'boolean', default: true })
-  isActive: boolean;
 
   @Column({ type: 'timestamp with time zone', nullable: true })
   deletedAt: Date | null;

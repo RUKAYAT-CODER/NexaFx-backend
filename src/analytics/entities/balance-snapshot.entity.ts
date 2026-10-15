@@ -15,21 +15,21 @@ export class BalanceSnapshot {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ name: 'user_id', type: 'uuid' })
   @Index()
   userId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ name: 'user_id' })
   user: User;
 
   @Column({ type: 'jsonb' })
   balances: Record<string, number>;
 
-  @Column({ type: 'date' })
+  @Column({ name: 'snapshot_date', type: 'date' })
   @Index()
   snapshotDate: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

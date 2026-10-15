@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
-import * as admin from 'firebase-admin';
+import { getApps } from 'firebase-admin/app';
+import { getMessaging, Message } from 'firebase-admin/messaging';
 
 @Injectable()
 export class FCMService {
@@ -22,7 +23,9 @@ export class FCMService {
     try {
       const user = await this.userRepository.findOne({ where: { id: userId } });
       if (!user) {
-        this.logger.warn(`User ${userId} not found, skipping push notification.`);
+        this.logger.warn(
+          `User ${userId} not found, skipping push notification.`,
+        );
         return;
       }
 
@@ -34,7 +37,7 @@ export class FCMService {
         return;
       }
 
-      if (admin.apps.length === 0) {
+      if (getApps().length === 0) {
         this.logger.warn(
           'Firebase Admin SDK is not initialized. Skipping push notification.',
         );
@@ -44,11 +47,12 @@ export class FCMService {
       const stringifiedData: Record<string, string> = {};
       if (data) {
         for (const [key, value] of Object.entries(data)) {
-          stringifiedData[key] = typeof value === 'string' ? value : JSON.stringify(value);
+          stringifiedData[key] =
+            typeof value === 'string' ? value : JSON.stringify(value);
         }
       }
 
-      const message: admin.messaging.Message = {
+      const message: Message = {
         token,
         notification: {
           title,
@@ -57,11 +61,12 @@ export class FCMService {
         data: stringifiedData,
       };
 
-      await admin.messaging().send(message);
+      await getMessaging().send(message);
       this.logger.log(`Push notification sent successfully to user ${userId}`);
     } catch (error) {
       // Constraint: "Push delivery failure must not throw — log error and continue"
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Failed to send push notification to user ${userId}: ${errorMessage}`,
         error instanceof Error ? error.stack : undefined,

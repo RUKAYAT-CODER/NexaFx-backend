@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/require-await */
+import { Operation, Asset } from 'stellar-sdk';
 import {
   Injectable,
   NotFoundException,
@@ -49,9 +50,12 @@ import { LedgerService } from '../../ledger/services/ledger.service';
 import { TransactionLimitService } from './transaction-limit.service';
 import { AmlService } from '../../modules/compliance/aml.service';
 import { RedisService } from '../../modules/redis/redis.service';
+import { MicroSavingsService } from '../../modules/micro-savings/micro-savings.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { TAX_QUEUE } from '../../modules/queues/queue.constants';
+import { UnifiedActivityFeedService } from '../../unified-activity-feed/unified-activity-feed.service';
+import { ActivityFeedType } from '../../unified-activity-feed/entities/activity-feed-item.entity';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,7 +67,10 @@ export function truncateMemoTo28Bytes(memo: string): string {
   const encoded = Buffer.from(memo, 'utf8');
   if (encoded.length <= 28) return memo;
   // Slice to 28 bytes, then decode — incomplete multi-byte sequences are dropped
-  return encoded.slice(0, 28).toString('utf8').replace(/\uFFFD/g, '');
+  return encoded
+    .slice(0, 28)
+    .toString('utf8')
+    .replace(/\uFFFD/g, '');
 }
 
 /** Narrows an unknown catch value to a plain Error with a message string. */
@@ -152,6 +159,7 @@ async function validateStellarDestination(
 @Injectable()
 export class TransactionsService {
   private readonly logger = new Logger(TransactionsService.name);
+  private readonly limitsService?: any;
 
   constructor(
     @InjectRepository(Transaction)
@@ -178,8 +186,10 @@ export class TransactionsService {
     private readonly transactionLimitService: TransactionLimitService,
     private readonly amlService: AmlService,
     private readonly redisService: RedisService,
+    private readonly microSavingsService: MicroSavingsService,
     @InjectQueue(TAX_QUEUE)
     private readonly taxQueue: Queue,
+    private readonly activityFeedService: UnifiedActivityFeedService,
   ) {}
 
   /**
@@ -198,7 +208,12 @@ export class TransactionsService {
     );
 
     if (this.limitsService) {
-      await this.limitsService.checkLimit(userId, TransactionType.DEPOSIT, amount, currency);
+      await this.limitsService.checkLimit(
+        userId,
+        TransactionType.DEPOSIT,
+        amount,
+        currency,
+      );
     } else {
       await this.transactionLimitService.check(userId, amount, currency);
     }
@@ -226,7 +241,11 @@ export class TransactionsService {
     }
 
     const fee = this.limitsService
-      ? await this.limitsService.calculateFee(TransactionType.DEPOSIT, amount, currency)
+      ? await this.limitsService.calculateFee(
+          TransactionType.DEPOSIT,
+          amount,
+          currency,
+        )
       : (await (this as any).feesService?.calculateFee(
           TransactionType.DEPOSIT,
           currency,
@@ -283,7 +302,6 @@ export class TransactionsService {
         operations: [paymentOperation],
         memo: stellarMemo,
       });
-
 
       const secretKey = await this.getStellarSecretKey();
       const paymentResult = await this.stellarService.sendPayment(
@@ -406,7 +424,12 @@ export class TransactionsService {
     }
 
     if (this.limitsService) {
-      await this.limitsService.checkLimit(userId, TransactionType.WITHDRAW, amount, currency);
+      await this.limitsService.checkLimit(
+        userId,
+        TransactionType.WITHDRAW,
+        amount,
+        currency,
+      );
     } else {
       await this.transactionLimitService.check(userId, amount, currency);
     }
@@ -445,7 +468,11 @@ export class TransactionsService {
     }
 
     const fee = this.limitsService
-      ? await this.limitsService.calculateFee(TransactionType.WITHDRAW, amount, currency)
+      ? await this.limitsService.calculateFee(
+          TransactionType.WITHDRAW,
+          amount,
+          currency,
+        )
       : (await (this as any).feesService?.calculateFee(
           TransactionType.WITHDRAW,
           currency,
@@ -517,7 +544,6 @@ export class TransactionsService {
         operations: [paymentOperation],
         memo: stellarMemo,
       });
-
 
       const secretKey = await this.getUserStellarSecretKey(
         userId,
@@ -611,7 +637,12 @@ export class TransactionsService {
     );
 
     if (this.limitsService) {
-      await this.limitsService.checkLimit(userId, TransactionType.SWAP, amount, fromCurrency);
+      await this.limitsService.checkLimit(
+        userId,
+        TransactionType.SWAP,
+        amount,
+        fromCurrency,
+      );
     } else {
       await this.transactionLimitService.check(userId, amount, fromCurrency);
     }
@@ -636,12 +667,20 @@ export class TransactionsService {
 
     // 3. Calculate Fee
     const fee = this.limitsService
-      ? await this.limitsService.calculateFee(TransactionType.SWAP, amount, fromCurrency)
+      ? await this.limitsService.calculateFee(
+          TransactionType.SWAP,
+          amount,
+          fromCurrency,
+        )
       : (await this.feesService.calculateFee(
           FeeTransactionType.SWAP,
           fromCurrency,
           amount,
-        )) || { feeAmount: 0, feeCurrency: fromCurrency, feeType: FeeType.FLAT };
+        )) || {
+          feeAmount: 0,
+          feeCurrency: fromCurrency,
+          feeType: FeeType.FLAT,
+        };
 
     if (parseFloat(userBalance) < amount + fee.feeAmount) {
       throw new BadRequestException(
@@ -774,10 +813,20 @@ export class TransactionsService {
         transaction.stellarTxHash = rawResult.hash;
         transaction.status = TransactionStatus.SUCCESS;
         await this.transactionRepository.save(transaction);
-        await this.redisService.delete('admin_stats');
-        this.taxQueue.add('process-transaction', { transactionId: transaction.id }).catch((e) =>
-          this.logger.error(`Failed to enqueue tax processing for swap transaction ${transaction.id}: ${e.message}`)
+        await this.activityFeedService.append(
+          transaction.userId,
+          ActivityFeedType.TRANSACTION_COMPLETE,
+          transaction.id,
+          'Transaction',
         );
+        await this.redisService.delete('admin_stats');
+        this.taxQueue
+          .add('process-transaction', { transactionId: transaction.id })
+          .catch((e) =>
+            this.logger.error(
+              `Failed to enqueue tax processing for swap transaction ${transaction.id}: ${e.message}`,
+            ),
+          );
 
         await this.updateUserBalance(
           userId,
@@ -815,6 +864,27 @@ export class TransactionsService {
         this.amlService
           .enqueue(transaction.id)
           .catch((e) => this.logger.error(`AML enqueue failed: ${e.message}`));
+
+        // Async micro-savings evaluation — never blocks the originating transaction
+        this.microSavingsService
+          .evaluatePerTransaction(
+            userId,
+            transaction.id,
+            parseFloat(transaction.amount),
+            fromCurrency,
+          )
+          .catch((e) =>
+            this.logger.error(
+              `Micro-savings per-transaction eval failed: ${e.message}`,
+            ),
+          );
+        this.microSavingsService
+          .evaluateBalanceThreshold(userId, fromCurrency)
+          .catch((e) =>
+            this.logger.error(
+              `Micro-savings balance-threshold eval failed: ${e.message}`,
+            ),
+          );
 
         return transaction;
       } catch (err) {
@@ -991,6 +1061,12 @@ export class TransactionsService {
 
       if (verificationResult.status === 'SUCCESS') {
         transaction.status = TransactionStatus.SUCCESS;
+        await this.activityFeedService.append(
+          transaction.userId,
+          ActivityFeedType.TRANSACTION_COMPLETE,
+          transaction.id,
+          'Transaction',
+        );
         await this.redisService.delete('admin_stats');
 
         if (transaction.type === TransactionType.DEPOSIT) {
@@ -1024,9 +1100,36 @@ export class TransactionsService {
       await this.transactionRepository.save(transaction);
 
       if (transaction.status === TransactionStatus.SUCCESS) {
-        this.taxQueue.add('process-transaction', { transactionId: transaction.id }).catch((e) =>
-          this.logger.error(`Failed to enqueue tax processing for verified transaction ${transaction.id}: ${e.message}`)
-        );
+        this.taxQueue
+          .add('process-transaction', { transactionId: transaction.id })
+          .catch((e) =>
+            this.logger.error(
+              `Failed to enqueue tax processing for verified transaction ${transaction.id}: ${e.message}`,
+            ),
+          );
+
+        // Async micro-savings evaluation — never blocks the originating transaction
+        if (transaction.type === TransactionType.WITHDRAW) {
+          this.microSavingsService
+            .evaluatePerTransaction(
+              transaction.userId,
+              transaction.id,
+              parseFloat(transaction.amount),
+              transaction.currency,
+            )
+            .catch((e) =>
+              this.logger.error(
+                `Micro-savings per-transaction eval failed: ${e.message}`,
+              ),
+            );
+          this.microSavingsService
+            .evaluateBalanceThreshold(transaction.userId, transaction.currency)
+            .catch((e) =>
+              this.logger.error(
+                `Micro-savings balance-threshold eval failed: ${e.message}`,
+              ),
+            );
+        }
       }
 
       await this.auditLogsService.logTransactionEvent(
@@ -1113,9 +1216,19 @@ export class TransactionsService {
     await this.transactionRepository.save(transaction);
 
     if (transaction.status === TransactionStatus.SUCCESS) {
-      this.taxQueue.add('process-transaction', { transactionId: transaction.id }).catch((e) =>
-        this.logger.error(`Failed to enqueue tax processing for manual status update ${transaction.id}: ${e.message}`)
+      await this.activityFeedService.append(
+        transaction.userId,
+        ActivityFeedType.TRANSACTION_COMPLETE,
+        transaction.id,
+        'Transaction',
       );
+      this.taxQueue
+        .add('process-transaction', { transactionId: transaction.id })
+        .catch((e) =>
+          this.logger.error(
+            `Failed to enqueue tax processing for manual status update ${transaction.id}: ${e.message}`,
+          ),
+        );
     }
 
     await this.auditLogsService.logTransactionEvent(
@@ -1288,7 +1401,9 @@ export class TransactionsService {
 
     try {
       const allCurrencies = await this.currenciesService.findAll(false);
-      const currencyMap = new Map(allCurrencies.map((c) => [c.code.toUpperCase(), c]));
+      const currencyMap = new Map(
+        allCurrencies.map((c) => [c.code.toUpperCase(), c]),
+      );
       for (const currencyCode of uniqueCurrencies) {
         const currency = currencyMap.get(currencyCode.toUpperCase());
         if (currency) {
@@ -1563,6 +1678,9 @@ export class TransactionsService {
     failureReason?: string,
   ): Promise<void> {
     try {
+      const user = await this.usersService.findById(userId);
+      if (!user || !user.fcmTokens || user.fcmTokens.length === 0) return;
+
       const actionText =
         transaction.type === TransactionType.DEPOSIT ? 'Deposit' : 'Withdrawal';
       let title = '';

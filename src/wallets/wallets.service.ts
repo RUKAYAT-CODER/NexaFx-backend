@@ -109,7 +109,10 @@ export class WalletsService {
   /**
    * Return specific wallet of the authenticated user
    */
-  async findByUserAndCurrency(userId: string, currency: string): Promise<Wallet> {
+  async findByUserAndCurrency(
+    userId: string,
+    currency: string,
+  ): Promise<Wallet> {
     const targetCurrency = currency.trim().toUpperCase();
     const wallet = await this.walletRepository.findOne({
       where: { userId, currency: targetCurrency },
@@ -147,6 +150,38 @@ export class WalletsService {
     );
 
     this.logger.log(`Seeded primary wallet for user ${userId}`);
+  }
+
+  /**
+   * Create a wallet with a prefilled balance for a user (e.g. sandbox seeding).
+   * Idempotent — a wallet for the same user/currency is not duplicated.
+   */
+  async create(
+    userId: string,
+    currency: string,
+    balance: string,
+  ): Promise<Wallet> {
+    const targetCurrency = currency.trim().toUpperCase();
+    const existing = await this.walletRepository.findOne({
+      where: { userId, currency: targetCurrency },
+    });
+    if (existing) return existing;
+
+    const wallet = this.walletRepository.create({
+      userId,
+      currency: targetCurrency,
+      balance,
+      label: 'Sandbox',
+      network: this.network,
+    });
+    return this.walletRepository.save(wallet);
+  }
+
+  /**
+   * Delete every wallet owned by a user (used when resetting a sandbox).
+   */
+  async deleteByUserId(userId: string): Promise<void> {
+    await this.walletRepository.delete({ userId });
   }
 
   // ── Resolution ────────────────────────────────────────────────────────────
@@ -266,6 +301,8 @@ export class WalletsService {
           encryptedSecretKey: w.encryptedSecretKey,
           label: w.label,
           isDefault: w.isDefault,
+          isWatchOnly: !w.encryptedSecretKey,
+          balanceError: null,
           network: w.network,
           createdAt: w.createdAt,
           updatedAt: w.updatedAt,
@@ -274,7 +311,16 @@ export class WalletsService {
       }),
     );
 
-    return { items, total, page: safePage, pageSize: safePageSize };
+    return {
+      items: withBalances.map((b: any) => ({
+        ...b,
+        isWatchOnly: false,
+        balanceError: null,
+      })) as any,
+      total,
+      page: safePage,
+      pageSize: safePageSize,
+    };
   }
 
   /**
@@ -322,39 +368,6 @@ export class WalletsService {
     );
 
     return this.toSummary(saved);
-    const wallet = this.walletRepository.create({
-      userId,
-      publicKey: generated.publicKey,
-      encryptedSecretKey: encrypted,
-      label,
-      isDefault: false,
-      network: this.getNetwork(),
-      currency: 'XLM',
-      balance: '0.00000000',
-    });
-    const saved = await this.walletRepository.save(wallet);
-
-    if (saved.publicKey) {
-      try {
-        await this.stellarService.fundTestnetWallet(saved.publicKey);
-      } catch {
-        // Friendbot funding is best-effort for newly generated wallets.
-      }
-    }
-
-    return {
-      id: saved.id,
-      userId: saved.userId,
-      currency: saved.currency,
-      balance: saved.balance,
-      publicKey: saved.publicKey,
-      encryptedSecretKey: saved.encryptedSecretKey,
-      label: saved.label,
-      isDefault: saved.isDefault,
-      network: saved.network,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
   }
 
   /**
@@ -397,31 +410,6 @@ export class WalletsService {
     );
 
     return this.toSummary(saved);
-    const wallet = this.walletRepository.create({
-      userId,
-      publicKey: normalized,
-      encryptedSecretKey: null,
-      label,
-      isDefault: false,
-      network: this.getNetwork(),
-      currency: 'XLM',
-      balance: '0.00000000',
-    });
-    const saved = await this.walletRepository.save(wallet);
-
-    return {
-      id: saved.id,
-      userId: saved.userId,
-      currency: saved.currency,
-      balance: saved.balance,
-      publicKey: saved.publicKey,
-      encryptedSecretKey: saved.encryptedSecretKey,
-      label: saved.label,
-      isDefault: saved.isDefault,
-      network: saved.network,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
   }
 
   /**
@@ -442,19 +430,6 @@ export class WalletsService {
     wallet.label = sanitized;
     const saved = await this.walletRepository.save(wallet);
     return this.toSummary(saved);
-    return {
-      id: saved.id,
-      userId: saved.userId,
-      currency: saved.currency,
-      balance: saved.balance,
-      publicKey: saved.publicKey,
-      encryptedSecretKey: saved.encryptedSecretKey,
-      label: saved.label,
-      isDefault: saved.isDefault,
-      network: saved.network,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
   }
 
   /**
@@ -463,20 +438,27 @@ export class WalletsService {
    * database transaction.
    */
   async setDefault(userId: string, walletId: string): Promise<void> {
-    await this.dataSource.transaction(async manager => {
+    await this.dataSource.transaction(async (manager) => {
       const walletRepo = manager.getRepository(Wallet);
 
-      const target = await walletRepo.findOne({ where: { id: walletId, userId } });
+      const target = await walletRepo.findOne({
+        where: { id: walletId, userId },
+      });
       if (!target) throw new NotFoundException('Wallet not found');
 
       if (target.isDefault) return; // already default — nothing to do
 
       // Clear all defaults first, then set the target.
-      await walletRepo.update({ userId, isDefault: true }, { isDefault: false });
+      await walletRepo.update(
+        { userId, isDefault: true },
+        { isDefault: false },
+      );
       await walletRepo.update({ id: walletId }, { isDefault: true });
 
       // Keep the User row in sync so legacy code still works.
-      const userUpdate: Partial<User> = { walletPublicKey: target.publicKey };
+      const userUpdate: Partial<User> = {
+        walletPublicKey: target.publicKey as string,
+      };
       if (target.encryptedSecretKey != null) {
         userUpdate.walletSecretKeyEncrypted = target.encryptedSecretKey;
       }
@@ -572,7 +554,12 @@ export class WalletsService {
     let balanceError: string | null = null;
 
     try {
-      balances = await this.stellarService.getWalletBalances(wallet.publicKey);
+      balances = await this.stellarService.getWalletBalances(
+        wallet.publicKey as string,
+      );
+      balances = await this.stellarService.getWalletBalances(
+        wallet.publicKey as any,
+      );
     } catch (err) {
       balanceError =
         err instanceof Error ? err.message : 'Failed to fetch balances';
@@ -583,6 +570,11 @@ export class WalletsService {
 
     return {
       ...this.toSummary(wallet),
+      userId: wallet.userId,
+      currency: wallet.currency,
+      balance: wallet.balance,
+      encryptedSecretKey: wallet.encryptedSecretKey,
+      updatedAt: wallet.updatedAt,
       balances,
       balanceError,
     };
@@ -591,7 +583,7 @@ export class WalletsService {
   private toSummary(wallet: Wallet): WalletSummary {
     return {
       id: wallet.id,
-      publicKey: wallet.publicKey,
+      publicKey: wallet.publicKey as string,
       label: wallet.label,
       isDefault: wallet.isDefault,
       isWatchOnly: !wallet.encryptedSecretKey,
@@ -602,7 +594,7 @@ export class WalletsService {
 
   private toTransactionContext(wallet: Wallet): TransactionWalletContext {
     return {
-      publicKey: wallet.publicKey,
+      publicKey: wallet.publicKey as string,
       encryptedSecretKey: wallet.encryptedSecretKey,
       isWatchOnly: !wallet.encryptedSecretKey,
     };

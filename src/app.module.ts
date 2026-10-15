@@ -15,7 +15,6 @@ import { CommonModule } from './common/common.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { PlanThrottlerGuard } from './common/guards/plan-throttler.guard';
-import { ImpersonationRestrictionGuard } from './common/guards/impersonation-restriction.guard';
 import { HealthModule } from './health/health.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -27,6 +26,7 @@ import { ScheduledJobsModule } from './scheduled-jobs/scheduled-jobs.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { FeesModule } from './fees/fees.module';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module';
+import { QrModule } from './qr/qr.module';
 import { FirebaseModule } from './firebase/firebase.module';
 import { AdminModule } from './admin/admin.module';
 import { ReferralsModule } from './referrals/referrals.module';
@@ -40,63 +40,13 @@ import { EscrowModule } from './escrow/escrow.module';
 import { RateAlertsModule } from './rate-alerts/rate-alerts.module';
 import { LedgerModule } from './ledger/ledger.module';
 import { UsersModule } from './users/users.module';
-import { ExperimentsModule } from './experiments/experiments.module';
-import { ComplianceModule } from './modules/compliance/compliance.module';
-import { SearchModule } from './search/search.module';
-import { MessagingModule } from './messaging/messaging.module';
+import { PortfolioModule } from './portfolio/portfolio.module';
+import { FinancialHealthModule } from './financial-health/financial-health.module';
+import { CustomReportsModule } from './custom-reports/custom-reports.module';
 import { TransactionsV2Module } from './transactions/transaction-v2.module';
-import { FiatV2Module } from './fiat/fiat-v2.module';
-import { BatchesV2Module } from './batches/batches-v2.module';
 import { TaxModule } from './tax/tax.module';
-import { OrganisationsModule } from './organisations/organisations.module';
-import { SanctionsModule } from './sanctions/sanctions.module';
-import { LoansModule } from './loans/loans.module';
-import { DisputesModule } from './disputes/disputes.module';
-import { CardsModule } from './cards/cards.module';
-import { VaultsModule } from './vaults/vaults.module';
-import { ZeroDowntimeDeploymentModule } from './zero-downtime-deployment/zero-downtime-deployment.module';
-import { RateAlertsEnhancementModule } from './rate-alerts-enhancement/rate-alerts-enhancement.module';
-import { WebhookVerificationSdkModule } from './webhook-verification-sdk/webhook-verification-sdk.module';
-import { PlatformHealthRunbookModule } from './platform-health-runbook/platform-health-runbook.module';
-import { RegulatoryReportingModule } from './regulatory-reporting/regulatory-reporting.module';
-import { MultiSignatureWalletsModule } from './multi-signature-wallets/multi-signature-wallets.module';
-import { DashboardPreferencesModule } from './dashboard-preferences/dashboard-preferences.module';
-import { FraudRiskScoringModule } from './fraud-risk-scoring/fraud-risk-scoring.module';
-import { DataResidencyModule } from './data-residency/data-residency.module';
-import { MerchantIntegrationModule } from './merchant-integration/merchant-integration.module';
-import { ProgrammablePaymentRulesModule } from './programmable-payment-rules/programmable-payment-rules.module';
-import { GraphqlSubscriptionsModule } from './graphql-subscriptions/graphql-subscriptions.module';
-import { LoadTestingModule } from './load-testing/load-testing.module';
-import { AiKycDocVerificationModule } from './ai-kyc-doc-verification/ai-kyc-doc-verification.module';
-import { MobileSdkGuideModule } from './mobile-sdk-guide/mobile-sdk-guide.module';
-import { OwaspZapDastModule } from './owasp-zap-dast/owasp-zap-dast.module';
-import { StellarSep24AnchorModule } from './stellar-sep24-anchor/stellar-sep24-anchor.module';
-import { FraudModule } from './modules/fraud/fraud.module';
-import { FiatModule } from './modules/fiat/fiat.module';
-import { HealthReportModule } from './modules/health-report/health-report.module';
-import { SimulatorModule } from './modules/simulator/simulator.module';
-import { CorridorsModule } from './modules/corridors/corridors.module';
-import { ConfigModule as PlatformConfigModule } from './modules/config/config.module';
-import { LendingModule } from './modules/lending/lending.module';
-import { RiskModule } from './modules/risk/risk.module';
-import { EmbeddedModule } from './modules/embedded/embedded.module';
-import { SigningModule } from './modules/signing/signing.module';
-import { StatusModule } from './modules/status/status.module';
-import { SavingsRecommendationsModule } from './modules/savings-recommendations/savings-recommendations.module';
-import { TrainingModule } from './modules/training/training.module';
-import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
-import { ColdStorageModule } from './modules/cold-storage/cold-storage.module';
-import { SandboxModule } from './modules/sandbox/sandbox.module';
-import { RevenueModule } from './modules/revenue/revenue.module';
-import { SpendingGoalsModule } from './modules/spending-goals/spending-goals.module';
-import { ForensicsModule } from './modules/forensics/forensics.module';
-import { OptionsModule } from './modules/options/options.module';
-import { StatementsModule } from './modules/statements/statements.module';
-import { WalletConnectModule } from './modules/walletconnect/walletconnect.module';
-import { ColdStorageModule } from './modules/cold-storage/cold-storage.module';
-import { SandboxModule } from './modules/sandbox/sandbox.module';
-import { DbAdvisoryModule } from './modules/db-advisory/db-advisory.module';
-import { ModerationModule } from './modules/moderation/moderation.module';
+import { FlagsModule } from './modules/flags/flags.module';
+import { UnifiedActivityFeedModule } from './unified-activity-feed/unified-activity-feed.module';
 
 @Module({
   imports: [
@@ -107,6 +57,7 @@ import { ModerationModule } from './modules/moderation/moderation.module';
     ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
+      inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
         url: configService.get<string>('DATABASE_URL'),
@@ -122,36 +73,28 @@ import { ModerationModule } from './modules/moderation/moderation.module';
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
+      inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         connection: {
-          url: configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
+          url:
+            configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
         },
       }),
     }),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ([{
-        ttl: configService.get<number>('THROTTLE_TTL') ?? 60000,
-        limit: configService.get<number>('THROTTLE_LIMIT') ?? 100,
-      }]),
+      useFactory: (configService: ConfigService) => [
+        {
+          ttl: configService.get<number>('THROTTLE_TTL') ?? 60000,
+          limit: configService.get<number>('THROTTLE_LIMIT') ?? 100,
+        },
+      ],
     }),
-    ZeroDowntimeDeploymentModule,
-    RateAlertsEnhancementModule,
-    WebhookVerificationSdkModule,
-    PlatformHealthRunbookModule,
-    RegulatoryReportingModule,
-    MultiSignatureWalletsModule,
-    DashboardPreferencesModule,
-    FraudRiskScoringModule,
-    DataResidencyModule,
-    MerchantIntegrationModule,
-    ProgrammablePaymentRulesModule,
-    GraphqlSubscriptionsModule,
-    LoadTestingModule,
-    AiKycDocVerificationModule,
-    MobileSdkGuideModule,
-    OwaspZapDastModule,
+    FlagsModule,
+    TaxModule,
+    UnifiedActivityFeedModule,
+    UnifiedActivityFeedModule,
     I18nModule.forRootAsync({
       useFactory: () => ({
         fallbackLanguage: 'en',
@@ -173,8 +116,6 @@ import { ModerationModule } from './modules/moderation/moderation.module';
     FirebaseModule,
     TransactionsModule,
     TransactionsV2Module,
-    FiatV2Module,
-    BatchesV2Module,
     ReferralsModule,
     BeneficiariesModule,
     KycModule,
@@ -182,6 +123,7 @@ import { ModerationModule } from './modules/moderation/moderation.module';
     ReceiptsModule,
     FeesModule,
     PushNotificationsModule,
+    QrModule,
     // Rate alerts: user-configured exchange rate notifications
     RateAlertsModule,
     AdminModule,
@@ -194,44 +136,9 @@ import { ModerationModule } from './modules/moderation/moderation.module';
     WalletsModule,
     LedgerModule,
     UsersModule,
-    ExperimentsModule,
-    ComplianceModule,
-    SearchModule,
-    MessagingModule,
-    TaxModule,
-    OrganisationsModule,
-    SanctionsModule,
-    LoansModule,
-    DisputesModule,
-    CardsModule,
-    VaultsModule,
-    StellarSep24AnchorModule,
-    FraudModule,
-    FiatModule,
-    HealthReportModule,
-    SimulatorModule,
-    CorridorsModule,
-    PlatformConfigModule,
-    LendingModule,
-    RiskModule,
-    EmbeddedModule,
-    SigningModule,
-    StatusModule,
-    SavingsRecommendationsModule,
-    TrainingModule,
-    BankAccountsModule,
-    ColdStorageModule,
-    SandboxModule,
-    RevenueModule,
-    SpendingGoalsModule,
-    ForensicsModule,
-    OptionsModule,
-    StatementsModule,
-    WalletConnectModule,
-    ColdStorageModule,
-    SandboxModule,
-    DbAdvisoryModule,
-    ModerationModule,
+    PortfolioModule,
+    FinancialHealthModule,
+    CustomReportsModule,
   ],
   controllers: [AppController],
   providers: [
@@ -250,4 +157,3 @@ import { ModerationModule } from './modules/moderation/moderation.module';
   ],
 })
 export class AppModule {}
-

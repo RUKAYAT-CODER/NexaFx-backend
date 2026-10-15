@@ -67,9 +67,7 @@ export class TransactionConfidenceService {
     private readonly usersService: UsersService,
   ) {}
 
-  async score(
-    transaction: Partial<Transaction>,
-  ): Promise<ConfidenceResult> {
+  async score(transaction: Partial<Transaction>): Promise<ConfidenceResult> {
     const cacheKey = this.redisService.key(
       'confidence',
       `score:${transaction.id ?? 'pending'}`,
@@ -110,10 +108,13 @@ export class TransactionConfidenceService {
 
     const score = Math.max(0, Math.min(100, baseScore));
     const label = this.getConfidenceLabel(score);
-    const expectedCompletionSeconds =
-      this.getExpectedCompletionSeconds(score, networkStatus);
-    const expectedCompletionLabel =
-      this.formatExpectedCompletion(expectedCompletionSeconds);
+    const expectedCompletionSeconds = this.getExpectedCompletionSeconds(
+      score,
+      networkStatus,
+    );
+    const expectedCompletionLabel = this.formatExpectedCompletion(
+      expectedCompletionSeconds,
+    );
 
     const result: ConfidenceResult = {
       score,
@@ -139,18 +140,17 @@ export class TransactionConfidenceService {
     try {
       const feeStats = await this.stellarService.getNetworkFeeStats();
 
-      const ledgerCloseTimeMs = parseInt(
-        feeStats.ledger_capacity_stats?.ledger_close_time_ms ?? '5500',
-        10,
-      );
-      const baseFee = feeStats.p50_accepted_fee ?? '100';
+      const baseFee = feeStats.fee_charged?.p50 ?? '100';
+      const capacityUsage = parseFloat(feeStats.ledger_capacity_usage ?? '0');
+
+      const ledgerCloseTimeMs = capacityUsage > 0.8 ? 8500 : 5500;
       const queuedTransactions =
-        parseInt(feeStats.transaction_capacity_pending ?? '0', 10);
+        capacityUsage > 0.95 ? 150 : capacityUsage > 0.8 ? 50 : 0;
 
       let networkStatus: 'HEALTHY' | 'DEGRADED' | 'CONGESTED' = 'HEALTHY';
-      if (queuedTransactions > 100) {
+      if (capacityUsage > 0.95) {
         networkStatus = 'CONGESTED';
-      } else if (queuedTransactions > 20 || ledgerCloseTimeMs > 8000) {
+      } else if (capacityUsage > 0.8) {
         networkStatus = 'DEGRADED';
       }
 
@@ -192,9 +192,7 @@ export class TransactionConfidenceService {
     }
   }
 
-  async getCompletionStats(
-    userId: string,
-  ): Promise<UserCompletionStats> {
+  async getCompletionStats(userId: string): Promise<UserCompletionStats> {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -261,9 +259,7 @@ export class TransactionConfidenceService {
       const wallets = await this.walletsService.findAllByUser(
         transaction.userId,
       );
-      const wallet = wallets.find(
-        (w) => w.currency === transaction.currency,
-      );
+      const wallet = wallets.find((w) => w.currency === transaction.currency);
 
       if (wallet) {
         const walletBalance = parseFloat(wallet.balance);
